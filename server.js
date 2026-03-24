@@ -46,8 +46,8 @@ app.post('/voice', (req, res) => {
   });
 
   const twiml = new twilio.twiml.VoiceResponse();
-  twiml.say({ voice: 'Polly.Joanna', language: 'en-US' },
-    'Hello! I am your AI assistant. How can I help you today?'
+  twiml.say({ voice: 'Polly.Tatyana', language: 'ru-RU' },
+    'Привіт! Це BigBoss. Слухаю тебе.'
   );
 
   const gather = twiml.gather({
@@ -55,12 +55,12 @@ app.post('/voice', (req, res) => {
     action: '/gather',
     method: 'POST',
     speechTimeout: 'auto',
-    language: 'en-US',
+    language: 'ru-RU',
   });
-  gather.say({ voice: 'Polly.Joanna' }, '');
+  gather.say({ voice: 'Polly.Tatyana' }, '');
 
   // If no input, prompt again
-  twiml.say({ voice: 'Polly.Joanna' }, 'I didn\'t hear anything. Please try again.');
+  twiml.say({ voice: 'Polly.Tatyana' }, 'Не чую тебе. Спробуй ще раз.');
   twiml.redirect('/voice');
 
   res.type('text/xml');
@@ -100,7 +100,7 @@ app.post('/gather', async (req, res) => {
       model: 'llama-3.3-70b-versatile',
       max_tokens: 200,
       messages: [
-        { role: 'system', content: 'You are a helpful voice assistant. Keep responses concise and conversational — under 3 sentences. You are speaking on a phone call, so be natural and brief. Do not use markdown, lists, or special formatting.' },
+        { role: 'system', content: 'Ти BigBoss — голосовий AI асистент. Відповідай коротко, максимум 2-3 речення. Ти розмовляєш по телефону, будь природнім і лаконічним. Відповідай українською або російською — залежно від того як говорить людина. Не використовуй markdown, списки чи спеціальне форматування.' },
         ...conv.messages,
       ],
     });
@@ -117,19 +117,19 @@ app.post('/gather', async (req, res) => {
     }
 
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna', language: 'en-US' }, assistantMessage);
+    twiml.say({ voice: 'Polly.Tatyana', language: 'ru-RU' }, assistantMessage);
 
     const gather = twiml.gather({
       input: 'speech',
       action: '/gather',
       method: 'POST',
       speechTimeout: 'auto',
-      language: 'en-US',
+      language: 'ru-RU',
     });
-    gather.say({ voice: 'Polly.Joanna' }, '');
+    gather.say({ voice: 'Polly.Tatyana' }, '');
 
     // If no input after response
-    twiml.say({ voice: 'Polly.Joanna' }, 'Are you still there?');
+    twiml.say({ voice: 'Polly.Tatyana' }, 'Ти ще тут?');
     twiml.redirect('/voice');
 
     res.type('text/xml');
