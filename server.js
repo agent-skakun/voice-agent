@@ -47,7 +47,7 @@ app.post('/voice', (req, res) => {
 
   const twiml = new twilio.twiml.VoiceResponse();
   twiml.say({ voice: 'Polly.Tatyana', language: 'ru-RU' },
-    'Привіт! Це BigBoss. Слухаю тебе.'
+    'Привет! Это BigBoss. Слушаю тебя.'
   );
 
   const gather = twiml.gather({
@@ -60,7 +60,7 @@ app.post('/voice', (req, res) => {
   gather.say({ voice: 'Polly.Tatyana' }, '');
 
   // If no input, prompt again
-  twiml.say({ voice: 'Polly.Tatyana' }, 'Не чую тебе. Спробуй ще раз.');
+  twiml.say({ voice: 'Polly.Tatyana' }, 'Не слышу тебя. Попробуй ещё раз.');
   twiml.redirect('/voice');
 
   res.type('text/xml');
@@ -100,7 +100,7 @@ app.post('/gather', async (req, res) => {
       model: 'llama-3.3-70b-versatile',
       max_tokens: 200,
       messages: [
-        { role: 'system', content: 'Ти BigBoss — голосовий AI асистент. Відповідай коротко, максимум 2-3 речення. Ти розмовляєш по телефону, будь природнім і лаконічним. Відповідай українською або російською — залежно від того як говорить людина. Не використовуй markdown, списки чи спеціальне форматування.' },
+        { role: 'system', content: 'Ты BigBoss — голосовой AI ассистент SKAKUN. Отвечай коротко, максимум 2-3 предложения. Ты разговариваешь по телефону — будь естественным и лаконичным. Отвечай на русском языке. Не используй markdown, списки или специальное форматирование.' },
         ...conv.messages,
       ],
     });
@@ -129,7 +129,7 @@ app.post('/gather', async (req, res) => {
     gather.say({ voice: 'Polly.Tatyana' }, '');
 
     // If no input after response
-    twiml.say({ voice: 'Polly.Tatyana' }, 'Ти ще тут?');
+    twiml.say({ voice: 'Polly.Tatyana' }, 'Ты ещё здесь?');
     twiml.redirect('/voice');
 
     res.type('text/xml');
