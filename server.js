@@ -1,5 +1,5 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const Groq = require('groq-sdk');
 const twilio = require('twilio');
 
 const app = express();
@@ -8,10 +8,8 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Anthropic client
-const anthropic = new Anthropic.default({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Groq client
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // In-memory conversation history per call
 const conversations = new Map();
@@ -49,7 +47,7 @@ app.post('/voice', (req, res) => {
 
   const twiml = new twilio.twiml.VoiceResponse();
   twiml.say({ voice: 'Polly.Joanna', language: 'en-US' },
-    'Hello! I am your AI assistant powered by Claude. How can I help you today?'
+    'Hello! I am your AI assistant. How can I help you today?'
   );
 
   const gather = twiml.gather({
@@ -97,16 +95,18 @@ app.post('/gather', async (req, res) => {
   conv.lastUpdate = Date.now();
 
   try {
-    // Call Claude
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-3-5',
-      max_tokens: 300,
-      system: 'You are a helpful voice assistant. Keep responses concise and conversational — under 3 sentences. You are speaking on a phone call, so be natural and brief. Do not use markdown, lists, or special formatting.',
-      messages: conv.messages,
+    // Call Groq (LLaMA)
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 200,
+      messages: [
+        { role: 'system', content: 'You are a helpful voice assistant. Keep responses concise and conversational — under 3 sentences. You are speaking on a phone call, so be natural and brief. Do not use markdown, lists, or special formatting.' },
+        ...conv.messages,
+      ],
     });
 
-    const assistantMessage = response.content[0].text;
-    console.log(`[${new Date().toISOString()}] Claude response for ${callSid}: "${assistantMessage}"`);
+    const assistantMessage = response.choices[0].message.content;
+    console.log(`[${new Date().toISOString()}] Groq response for ${callSid}: "${assistantMessage}"`);
 
     // Add assistant message to history
     conv.messages.push({ role: 'assistant', content: assistantMessage });
@@ -135,7 +135,7 @@ app.post('/gather', async (req, res) => {
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] Claude API error:`, error.message);
+    console.error(`[${new Date().toISOString()}] Groq API error:`, error.message);
 
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.say({ voice: 'Polly.Joanna' },
@@ -161,5 +161,5 @@ app.post('/status', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Voice Agent server running on port ${PORT}`);
-  console.log(`ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? 'set (' + process.env.ANTHROPIC_API_KEY.slice(0, 10) + '...)' : 'NOT SET'}`);
+  console.log(`GROQ_API_KEY: ${process.env.GROQ_API_KEY ? 'set (' + process.env.GROQ_API_KEY.slice(0, 10) + '...)' : 'NOT SET'}`);
 });
