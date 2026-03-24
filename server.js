@@ -6,11 +6,19 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
+function getTelnyxApiKey() {
+  return process.env.TELNYX_API_KEY;
+}
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2';
 
-// Groq client
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// Groq client (lazy init — env vars may not be set at import time locally)
+let groq;
+function getGroq() {
+  if (!groq) {
+    groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  }
+  return groq;
+}
 
 // Voice config — AWS Polly Tatyana for Russian
 const VOICE = 'AWS.Polly.Tatyana';
@@ -39,7 +47,7 @@ async function telnyxCommand(callControlId, action, body = {}) {
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${TELNYX_API_KEY}`,
+      'Authorization': `Bearer ${getTelnyxApiKey()}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -124,7 +132,7 @@ async function processWithLLM(callControlId, userText) {
   }
 
   try {
-    const response = await groq.chat.completions.create({
+    const response = await getGroq().chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       max_tokens: 200,
       messages: [
@@ -294,7 +302,7 @@ app.post('/status', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Voice Agent (Telnyx Call Control) running on port ${PORT}`);
-  console.log(`TELNYX_API_KEY: ${TELNYX_API_KEY ? 'set (' + TELNYX_API_KEY.slice(0, 15) + '...)' : 'NOT SET'}`);
+  console.log(`TELNYX_API_KEY: ${getTelnyxApiKey() ? 'set (' + getTelnyxApiKey().slice(0, 15) + '...)' : 'NOT SET'}`);
   console.log(`GROQ_API_KEY: ${process.env.GROQ_API_KEY ? 'set (' + process.env.GROQ_API_KEY.slice(0, 10) + '...)' : 'NOT SET'}`);
   console.log(`Webhook URL: POST /webhook`);
 });
