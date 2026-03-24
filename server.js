@@ -1,165 +1,300 @@
 const express = require('express');
 const Groq = require('groq-sdk');
-const twilio = require('twilio');
+const crypto = require('crypto');
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
+const TELNYX_API_BASE = 'https://api.telnyx.com/v2';
 
 // Groq client
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// In-memory conversation history per call
+// Voice config — AWS Polly Tatyana for Russian
+const VOICE = 'AWS.Polly.Tatyana';
+const LANGUAGE = 'ru-RU';
+
+const SYSTEM_PROMPT = 'Ты BigBoss — голосовой AI ассистент. Отвечай коротко по-русски, максимум 2 предложения. Не используй markdown, списки или специальное форматирование — ты разговариваешь по телефону.';
+
+// In-memory conversation state per call
 const conversations = new Map();
 
 // Cleanup old conversations after 30 minutes
 setInterval(() => {
   const now = Date.now();
-  for (const [callSid, data] of conversations) {
+  for (const [callId, data] of conversations) {
     if (now - data.lastUpdate > 30 * 60 * 1000) {
-      conversations.delete(callSid);
+      conversations.delete(callId);
     }
   }
 }, 5 * 60 * 1000);
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'voice-agent', timestamp: new Date().toISOString() });
-});
+// ─── Telnyx API helper ───
+async function telnyxCommand(callControlId, action, body = {}) {
+  const url = `${TELNYX_API_BASE}/calls/${callControlId}/actions/${action}`;
+  console.log(`[${ts()}] → Telnyx ${action} for ${callControlId.slice(0, 20)}...`, JSON.stringify(body).slice(0, 200));
 
-// Root
-app.get('/', (req, res) => {
-  res.json({ service: 'voice-agent', status: 'running' });
-});
-
-// Twilio webhook — incoming call
-app.post('/voice', (req, res) => {
-  const callSid = req.body.CallSid;
-  console.log(`[${new Date().toISOString()}] Incoming call: ${callSid} from ${req.body.From}`);
-
-  // Initialize conversation
-  conversations.set(callSid, {
-    messages: [],
-    lastUpdate: Date.now(),
-  });
-
-  const twiml = new twilio.twiml.VoiceResponse();
-  twiml.say({ voice: 'Polly.Tatyana', language: 'ru-RU' },
-    'Привет! Это BigBoss. Слушаю тебя.'
-  );
-
-  const gather = twiml.gather({
-    input: 'speech',
-    action: '/gather',
+  const res = await fetch(url, {
     method: 'POST',
-    speechTimeout: 'auto',
-    language: 'ru-RU',
+    headers: {
+      'Authorization': `Bearer ${TELNYX_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
   });
-  gather.say({ voice: 'Polly.Tatyana' }, '');
 
-  // If no input, prompt again
-  twiml.say({ voice: 'Polly.Tatyana' }, 'Не слышу тебя. Попробуй ещё раз.');
-  twiml.redirect('/voice');
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
 
-  res.type('text/xml');
-  res.send(twiml.toString());
-});
-
-// Gather callback — process speech
-app.post('/gather', async (req, res) => {
-  const callSid = req.body.CallSid;
-  const speechResult = req.body.SpeechResult;
-  const confidence = req.body.Confidence;
-
-  console.log(`[${new Date().toISOString()}] Speech from ${callSid}: "${speechResult}" (confidence: ${confidence})`);
-
-  if (!speechResult) {
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna' }, 'I couldn\'t understand that. Could you please repeat?');
-    twiml.redirect('/voice');
-    res.type('text/xml');
-    return res.send(twiml.toString());
+  if (!res.ok) {
+    console.error(`[${ts()}] ✗ Telnyx ${action} failed (${res.status}):`, typeof data === 'string' ? data : JSON.stringify(data));
+  } else {
+    console.log(`[${ts()}] ✓ Telnyx ${action} OK (${res.status})`);
   }
+  return { ok: res.ok, status: res.status, data };
+}
 
-  // Get or create conversation
-  let conv = conversations.get(callSid);
+function ts() {
+  return new Date().toISOString();
+}
+
+// ─── Speak text on call ───
+async function speak(callControlId, text) {
+  return telnyxCommand(callControlId, 'speak', {
+    payload: text,
+    voice: VOICE,
+    language: LANGUAGE,
+    command_id: crypto.randomUUID(),
+  });
+}
+
+// ─── Start transcription (STT) ───
+async function startTranscription(callControlId) {
+  return telnyxCommand(callControlId, 'transcription_start', {
+    language: 'ru',
+    command_id: crypto.randomUUID(),
+    transcription_engine: 'Google',
+    interim_results: false,
+  });
+}
+
+// ─── Stop transcription ───
+async function stopTranscription(callControlId) {
+  return telnyxCommand(callControlId, 'transcription_stop', {
+    command_id: crypto.randomUUID(),
+  });
+}
+
+// ─── Answer incoming call ───
+async function answerCall(callControlId) {
+  return telnyxCommand(callControlId, 'answer', {
+    command_id: crypto.randomUUID(),
+  });
+}
+
+// ─── Get or create conversation ───
+function getConv(callControlId) {
+  let conv = conversations.get(callControlId);
   if (!conv) {
-    conv = { messages: [], lastUpdate: Date.now() };
-    conversations.set(callSid, conv);
+    conv = {
+      messages: [],
+      lastUpdate: Date.now(),
+      transcriptionStarted: false,
+      speaking: false,
+      pendingTranscript: null,
+    };
+    conversations.set(callControlId, conv);
   }
-
-  // Add user message
-  conv.messages.push({ role: 'user', content: speechResult });
   conv.lastUpdate = Date.now();
+  return conv;
+}
+
+// ─── Process user speech with Groq LLM ───
+async function processWithLLM(callControlId, userText) {
+  const conv = getConv(callControlId);
+
+  conv.messages.push({ role: 'user', content: userText });
+
+  // Keep history manageable
+  if (conv.messages.length > 20) {
+    conv.messages = conv.messages.slice(-20);
+  }
 
   try {
-    // Call Groq (LLaMA)
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       max_tokens: 200,
       messages: [
-        { role: 'system', content: 'Ты BigBoss — голосовой AI ассистент SKAKUN. Отвечай коротко, максимум 2-3 предложения. Ты разговариваешь по телефону — будь естественным и лаконичным. Отвечай на русском языке. Не используй markdown, списки или специальное форматирование.' },
+        { role: 'system', content: SYSTEM_PROMPT },
         ...conv.messages,
       ],
     });
 
     const assistantMessage = response.choices[0].message.content;
-    console.log(`[${new Date().toISOString()}] Groq response for ${callSid}: "${assistantMessage}"`);
+    console.log(`[${ts()}] Groq response: "${assistantMessage}"`);
 
-    // Add assistant message to history
     conv.messages.push({ role: 'assistant', content: assistantMessage });
+    conv.speaking = true;
 
-    // Keep conversation history manageable (last 10 exchanges)
-    if (conv.messages.length > 20) {
-      conv.messages = conv.messages.slice(-20);
-    }
+    // Stop transcription while speaking to avoid echo
+    await stopTranscription(callControlId);
+    conv.transcriptionStarted = false;
 
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: 'Polly.Tatyana', language: 'ru-RU' }, assistantMessage);
-
-    const gather = twiml.gather({
-      input: 'speech',
-      action: '/gather',
-      method: 'POST',
-      speechTimeout: 'auto',
-      language: 'ru-RU',
-    });
-    gather.say({ voice: 'Polly.Tatyana' }, '');
-
-    // If no input after response
-    twiml.say({ voice: 'Polly.Tatyana' }, 'Ты ещё здесь?');
-    twiml.redirect('/voice');
-
-    res.type('text/xml');
-    res.send(twiml.toString());
+    // Speak the response
+    await speak(callControlId, assistantMessage);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] Groq API error:`, error.message);
+    console.error(`[${ts()}] Groq API error:`, error.message);
+    conv.speaking = true;
+    await speak(callControlId, 'Произошла ошибка. Попробуй ещё раз.');
+  }
+}
 
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: 'Polly.Joanna' },
-      'I\'m sorry, I encountered an error processing your request. Let me try again.'
-    );
-    twiml.redirect('/voice');
-    res.type('text/xml');
-    res.send(twiml.toString());
+// ─── Health check ───
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'voice-agent-telnyx', timestamp: new Date().toISOString() });
+});
+
+app.get('/', (req, res) => {
+  res.json({ service: 'voice-agent', engine: 'telnyx-call-control', status: 'running' });
+});
+
+// ─── Main webhook handler ───
+app.post('/webhook', async (req, res) => {
+  // Immediately respond 200 to Telnyx
+  res.sendStatus(200);
+
+  const event = req.body?.data;
+  if (!event) {
+    console.log(`[${ts()}] Webhook received with no data`);
+    return;
+  }
+
+  const eventType = event.event_type;
+  const payload = event.payload || {};
+  const callControlId = payload.call_control_id;
+
+  console.log(`[${ts()}] ← Webhook: ${eventType} | call_control_id: ${callControlId?.slice(0, 20)}... | direction: ${payload.direction || 'n/a'}`);
+
+  if (!callControlId) {
+    console.log(`[${ts()}] No call_control_id in event, skipping`);
+    return;
+  }
+
+  try {
+    switch (eventType) {
+      case 'call.initiated': {
+        const conv = getConv(callControlId);
+        if (payload.direction === 'incoming') {
+          // Answer incoming calls
+          console.log(`[${ts()}] Incoming call from ${payload.from}, answering...`);
+          await answerCall(callControlId);
+        } else {
+          // Outbound call — wait for answered
+          console.log(`[${ts()}] Outbound call to ${payload.to}, waiting for answer...`);
+        }
+        break;
+      }
+
+      case 'call.answered': {
+        console.log(`[${ts()}] Call answered, starting greeting...`);
+        const conv = getConv(callControlId);
+        conv.speaking = true;
+        // Greet the user
+        await speak(callControlId, 'Привет! Это BigBoss. Слушаю тебя.');
+        break;
+      }
+
+      case 'call.speak.started': {
+        console.log(`[${ts()}] Speak started`);
+        break;
+      }
+
+      case 'call.speak.ended': {
+        console.log(`[${ts()}] Speak ended, starting transcription (listening)...`);
+        const conv = getConv(callControlId);
+        conv.speaking = false;
+
+        // If there was a pending transcript while we were speaking, process it
+        if (conv.pendingTranscript) {
+          const pending = conv.pendingTranscript;
+          conv.pendingTranscript = null;
+          console.log(`[${ts()}] Processing pending transcript: "${pending}"`);
+          await processWithLLM(callControlId, pending);
+        } else {
+          // Start listening
+          if (!conv.transcriptionStarted) {
+            await startTranscription(callControlId);
+            conv.transcriptionStarted = true;
+          }
+        }
+        break;
+      }
+
+      case 'call.transcription': {
+        const transcriptionData = payload.transcription_data;
+        if (!transcriptionData) break;
+
+        const transcript = transcriptionData.transcript;
+        const isFinal = transcriptionData.is_final;
+        const confidence = transcriptionData.confidence;
+
+        console.log(`[${ts()}] Transcription: "${transcript}" (final: ${isFinal}, confidence: ${confidence})`);
+
+        if (isFinal && transcript && transcript.trim().length > 0) {
+          const conv = getConv(callControlId);
+
+          if (conv.speaking) {
+            // We're currently speaking, queue the transcript
+            console.log(`[${ts()}] Currently speaking, queuing transcript`);
+            conv.pendingTranscript = transcript.trim();
+          } else {
+            // Process immediately
+            await processWithLLM(callControlId, transcript.trim());
+          }
+        }
+        break;
+      }
+
+      case 'call.hangup': {
+        console.log(`[${ts()}] Call ended (hangup). Reason: ${payload.hangup_cause || 'unknown'}`);
+        conversations.delete(callControlId);
+        break;
+      }
+
+      // Gather events (fallback if gather_using_speak is used)
+      case 'call.gather.ended': {
+        const digits = payload.digits;
+        console.log(`[${ts()}] Gather ended. Digits: ${digits}`);
+        break;
+      }
+
+      default:
+        console.log(`[${ts()}] Unhandled event: ${eventType}`);
+    }
+  } catch (err) {
+    console.error(`[${ts()}] Error handling ${eventType}:`, err.message);
   }
 });
 
-// Call status callback
-app.post('/status', (req, res) => {
-  const callSid = req.body.CallSid;
-  const status = req.body.CallStatus;
-  console.log(`[${new Date().toISOString()}] Call ${callSid} status: ${status}`);
+// Also handle POST to root (some Telnyx configs send to /)
+app.post('/', async (req, res) => {
+  // Forward to webhook handler
+  req.url = '/webhook';
+  app.handle(req, res);
+});
 
-  if (status === 'completed' || status === 'failed' || status === 'canceled') {
-    conversations.delete(callSid);
-  }
+// Status callback (legacy compatibility)
+app.post('/status', (req, res) => {
+  console.log(`[${ts()}] Status callback:`, JSON.stringify(req.body).slice(0, 200));
   res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
-  console.log(`Voice Agent server running on port ${PORT}`);
+  console.log(`Voice Agent (Telnyx Call Control) running on port ${PORT}`);
+  console.log(`TELNYX_API_KEY: ${TELNYX_API_KEY ? 'set (' + TELNYX_API_KEY.slice(0, 15) + '...)' : 'NOT SET'}`);
   console.log(`GROQ_API_KEY: ${process.env.GROQ_API_KEY ? 'set (' + process.env.GROQ_API_KEY.slice(0, 10) + '...)' : 'NOT SET'}`);
+  console.log(`Webhook URL: POST /webhook`);
 });
