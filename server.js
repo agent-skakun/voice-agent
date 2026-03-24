@@ -24,7 +24,7 @@ function getGroq() {
 const VOICE = 'AWS.Polly.Tatyana';
 const LANGUAGE = 'ru-RU';
 
-const SYSTEM_PROMPT = 'Ты BigBoss — голосовой AI ассистент. Отвечай коротко по-русски, максимум 2 предложения. Не используй markdown, списки или специальное форматирование — ты разговариваешь по телефону.';
+const SYSTEM_PROMPT = 'Ты Валентин Музыченко. Ты звонишь Арсену (Сене), который работает в CryptoDep. Представься как Валентин Музыченко. Спроси что Сеня сделал сегодня по CryptoDep и какие топ новости были. Веди диалог вежливо, по-русски. Отвечай коротко, максимум 2-3 предложения. Не используй markdown, списки или специальное форматирование — ты разговариваешь по телефону.';
 
 // In-memory conversation state per call
 const conversations = new Map();
@@ -211,7 +211,7 @@ app.post('/webhook', async (req, res) => {
         const conv = getConv(callControlId);
         conv.speaking = true;
         // Greet the user
-        await speak(callControlId, 'Привет! Это BigBoss. Слушаю тебя.');
+        await speak(callControlId, 'Алло, добрый день! Это Валентин Музыченко. Сеня, привет!');
         break;
       }
 
