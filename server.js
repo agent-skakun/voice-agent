@@ -21,7 +21,7 @@ function getGroq() {
 }
 
 // Voice config — AWS Polly Tatyana for Russian
-const VOICE = 'AWS.Polly.Tatyana';
+const VOICE = 'female';
 const LANGUAGE = 'ru-RU';
 
 const SYSTEM_PROMPT = 'Ты Валентин Музыченко. Ты звонишь Арсену (Сене), который работает в CryptoDep. Представься как Валентин Музыченко. Спроси что Сеня сделал сегодня по CryptoDep и какие топ новости были. Веди диалог вежливо, по-русски. Отвечай коротко, максимум 2-3 предложения. Не используй markdown, списки или специальное форматирование — ты разговариваешь по телефону.';
